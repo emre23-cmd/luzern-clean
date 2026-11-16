@@ -50,6 +50,7 @@ TEAM = [
     ("Joel", "Head of Operations", "Service delivery, scheduling and cleaner onboarding."),
     ("Salma", "Head of Customer Experience", "Customer support, service feedback and issue resolution."),
     ("Akin", "Head of IT & Infrastructure", "Platform development, infrastructure and reliability."),
+    ("Sardor", "Head of Marketing", "Brand strategy, marketing campaigns and customer acquisition."),
     ("Tapesh", "Head of Partnerships & Growth", "Local partnerships, cleaner network growth and expansion."),
 ]
 
