@@ -1,0 +1,4 @@
+# Luzern Clean — Streamlit Community Cloud
+# Python 3.12
+
+streamlit==1.67.0
