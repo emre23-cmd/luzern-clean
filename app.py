@@ -6,7 +6,11 @@ from zoneinfo import ZoneInfo
 import streamlit as st
 
 
-st.set_page_config(page_title="Luzern Clean", page_icon="🧹", layout="wide")
+st.set_page_config(
+    page_title="Luzern Clean",
+    page_icon="🌿",
+    layout="wide",
+)
 
 ZURICH = ZoneInfo("Europe/Zurich")
 AREAS = {
@@ -17,28 +21,18 @@ AREAS = {
     "Vitznau": (47.0106, 8.4839),
     "Küssnacht am Rigi": (47.0830, 8.4410),
 }
-
 SERVICES = {
-    "Regular home cleaning": (
-        2, 45, "Routine upkeep for kitchens, bathrooms, floors, and surfaces."
-    ),
-    "Deep cleaning": (
-        3, 55, "Detailed cleaning for buildup and hard-to-reach areas."
-    ),
-    "Move-out cleaning": (
-        4, 60, "Cleaning for an empty home before the handover."
-    ),
+    "Regular home cleaning": (2, 45),
+    "Deep cleaning": (3, 55),
+    "Move-out cleaning": (4, 60),
 }
-
-ADD_ONS = {
-    "Bring cleaning supplies": 12,
-    "Clean inside the oven": 25,
-    "Clean inside the fridge": 20,
+EXTRAS = {
+    "Cleaning supplies": 12,
+    "Inside the oven": 25,
+    "Inside the fridge": 20,
 }
-
-PROFILES = [
-    {
-        "id": "sofia",
+CLEANERS = {
+    "sofia": {
         "name": "Sofia M.",
         "initials": "SM",
         "base": "Luzern",
@@ -48,23 +42,21 @@ PROFILES = [
         "rating": 4.9,
         "jobs": 126,
         "premium": 0,
-        "bio": "Focuses on recurring home visits and detailed kitchen cleans.",
+        "bio": "Sofia focuses on recurring home visits and detailed kitchen cleans.",
     },
-    {
-        "id": "lea",
+    "lea": {
         "name": "Lea K.",
         "initials": "LK",
         "base": "Weggis",
         "areas": ("Weggis", "Vitznau", "Greppen", "Meggen"),
-        "services": ("Regular home cleaning", "Deep cleaning", "Move-out cleaning"),
+        "services": tuple(SERVICES),
         "languages": ("English", "German", "French"),
         "rating": 4.8,
         "jobs": 94,
         "premium": 4,
-        "bio": "Works across the lake communities and specialises in handover cleans.",
+        "bio": "Lea covers the lakeside communities and specialises in move-out cleans.",
     },
-    {
-        "id": "amina",
+    "amina": {
         "name": "Amina B.",
         "initials": "AB",
         "base": "Küssnacht am Rigi",
@@ -74,10 +66,9 @@ PROFILES = [
         "rating": 4.9,
         "jobs": 74,
         "premium": 2,
-        "bio": "Offers recurring visits and one-off deep cleans around Mount Rigi.",
+        "bio": "Amina offers regular visits and one-off deep cleans around Mount Rigi.",
     },
-    {
-        "id": "daniel",
+    "daniel": {
         "name": "Daniel R.",
         "initials": "DR",
         "base": "Meggen",
@@ -87,393 +78,582 @@ PROFILES = [
         "rating": 4.8,
         "jobs": 113,
         "premium": 5,
-        "bio": "Specialises in larger apartments and end-of-tenancy cleaning.",
+        "bio": "Daniel specialises in larger apartments and end-of-tenancy cleaning.",
     },
-    {
-        "id": "elif",
+    "elif": {
         "name": "Elif A.",
         "initials": "EA",
         "base": "Greppen",
-        "areas": ("Luzern", "Meggen", "Greppen", "Weggis", "Vitznau", "Küssnacht am Rigi"),
-        "services": ("Regular home cleaning", "Deep cleaning", "Move-out cleaning"),
+        "areas": tuple(AREAS),
+        "services": tuple(SERVICES),
         "languages": ("English", "German", "Turkish"),
         "rating": 4.9,
         "jobs": 82,
         "premium": 3,
-        "bio": "Handles regular visits and move-out cleans throughout the service area.",
+        "bio": "Elif handles regular visits and move-out cleans throughout the service area.",
     },
-]
+}
+STATUS_FLOW = ("Requested", "Confirmed", "On the way", "In progress", "Completed")
+DEMO_CARDS = {"Visa": "4242", "Mastercard": "4444"}
 
-STATUSES = ("Requested", "Confirmed", "On the way", "In progress", "Completed")
+state = st.session_state
+state.setdefault("lc_orders", [])
+state.setdefault("lc_personal", {"name": "", "email": "", "phone": ""})
+state.setdefault("lc_preferences", {"language": "English", "reminders": True})
+state.setdefault("lc_addresses", {})
+state.setdefault("lc_cards", {})
 
-st.session_state.setdefault("lc_bookings", [])
-st.session_state.setdefault("lc_selected", None)
-st.session_state.setdefault("lc_notice", None)
 
-
-def select_cleaner(profile_id):
-    st.session_state.lc_selected = profile_id
+def swiss_now():
+    return datetime.now(ZURICH)
 
 
 def maps_url(kind, **params):
-    return f"https://www.google.com/maps/{kind}/?{urlencode({'api': 1, **params})}"
+    query = urlencode({"api": 1, **params})
+    return f"https://www.google.com/maps/{kind}/?{query}"
 
 
-def service_price(profile, service):
-    return SERVICES[service][1] + profile["premium"]
+def hourly_rate(cleaner, service):
+    return SERVICES[service][1] + cleaner["premium"]
 
 
-def overlapping_booking(profile_id, starts, ends):
-    return any(
-        booking["profile_id"] == profile_id
-        and booking["status"] != "Cancelled"
-        and starts < booking["ends"]
-        and ends > booking["starts"]
-        for booking in st.session_state.lc_bookings
+def visit_label(order):
+    return f"{order['starts']:%d.%m.%Y · %H:%M}–{order['ends']:%H:%M}"
+
+
+def back(label, page):
+    if st.button(label, key=f"back_{page.url_path}"):
+        st.switch_page(page)
+
+
+def cleaner_header(cleaner):
+    # HTML values come only from the fixed demo profile catalogue.
+    st.markdown(
+        f"""
+        <div class="lc-person">
+            <span class="lc-avatar">{cleaner['initials']}</span>
+            <div><strong>{cleaner['name']}</strong>
+            <small>Based in {cleaner['base']}</small></div>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
 
 
-def change_status(booking_id, status):
-    for booking in st.session_state.lc_bookings:
-        if booking["id"] == booking_id:
-            booking["status"] = status
-            booking["history"].append((status, datetime.now(ZURICH)))
-            return
+def show_map(area, cleaners):
+    places = list(dict.fromkeys([area, *(cleaner["base"] for cleaner in cleaners)]))
+    st.map(
+        {
+            "lat": [AREAS[place][0] for place in places],
+            "lon": [AREAS[place][1] for place in places],
+            "color": ["#157049" if place == area else "#D0793A" for place in places],
+        },
+        latitude="lat",
+        longitude="lon",
+        color="color",
+        size=210,
+        height=390,
+    )
+    st.caption("Green pin · Your service area. Orange pins · Cleaner base towns.")
+    st.link_button(
+        f"Open {area} in Google Maps",
+        maps_url("search", query=f"{area}, Switzerland"),
+        width="stretch",
+    )
 
 
-st.markdown(
-    """
-    <style>
-    @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Instrument+Serif&display=swap');
+def explore():
+    st.markdown(
+        """
+        <div class="lc-hero">
+            <h1>Where do you need cleaning?</h1>
+            <p>Find a cleaner, compare rates and choose a time that works for you.</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-    .stApp, [data-testid="stHeader"] { background: #f5f7f3; }
-    [data-testid="stMainBlockContainer"] {
-        max-width: 1230px;
-        padding-top: 2.5rem;
-        padding-bottom: 4rem;
-    }
-    [data-testid="stMainBlockContainer"] :is(h2, h3, h4, p, label) {
-        color: #18352b;
-        font-family: "DM Sans", sans-serif;
-    }
-    .lc-hero {
-        padding: clamp(32px, 7vw, 82px);
-        border-radius: 28px;
-        background:
-            radial-gradient(ellipse at 92% 2%, #418665, transparent 53%),
-            linear-gradient(130deg, #102c23, #1b4d3d);
-    }
-    .lc-hero h1 {
-        margin: 0 0 14px;
-        padding: 0;
-        color: #fff;
-        font: 400 clamp(3.6rem, 8vw, 7rem)/.95 "Instrument Serif", Georgia, serif;
-    }
-    .lc-hero p {
-        color: #e0f1e8 !important;
-        margin: 0;
-        max-width: 48ch;
-    }
-    .lc-profile {
-        display: flex;
-        align-items: center;
-        gap: 12px;
-    }
-    .lc-avatar {
-        display: grid;
-        place-items: center;
-        width: 46px;
-        height: 46px;
-        border-radius: 50%;
-        background: #dfefe5;
-        color: #194434;
-        font: 700 .95rem "DM Sans", sans-serif;
-    }
-    .lc-profile h4 { margin: 0; padding: 0; }
-    .lc-profile small { color: #456655; }
-    .lc-quote {
-        padding: 24px;
-        background: #173d30;
-        border-radius: 17px;
-        color: #f4fbf6;
-    }
-    .lc-quote div {
-        font: 400 3.7rem/1.15 "Instrument Serif", Georgia, serif;
-    }
-    .lc-quote p { color: #e1f0e8 !important; margin: 0; }
-    button[kind="primary"] {
-        background: #205b45;
-        border-color: #205b45;
-        color: #fff;
-    }
-    button[kind="primary"]:hover {
-        background: #164431;
-        border-color: #164431;
-        color: #fff;
-    }
-    </style>
-    <div class="lc-hero">
-        <h1>Luzern Clean</h1>
-        <p>Find a cleaner in the Lucerne area, compare prices, and plan your visit.</p>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
-
-st.caption("Demo · Sample profiles and prices. Bookings are saved for this session.")
-
-find_tab, bookings_tab = st.tabs(
-    ["Find a cleaner", f"My bookings ({len(st.session_state.lc_bookings)})"]
-)
-
-with find_tab:
-    st.subheader("Find a cleaner in your area")
-    filter_columns = st.columns(4)
-
-    with filter_columns[0]:
-        area = st.selectbox("Service area", list(AREAS))
-    with filter_columns[1]:
+    a, b, c, d = st.columns(4)
+    with a:
+        area = st.selectbox("Visit area", list(AREAS))
+    with b:
         service = st.selectbox("Service", list(SERVICES))
-    with filter_columns[2]:
-        language = st.selectbox(
-            "Preferred language",
-            ["Any"] + sorted({lang for profile in PROFILES for lang in profile["languages"]}),
-        )
-    with filter_columns[3]:
-        order = st.selectbox("Sort by", ["Top rated", "Lowest hourly rate", "Most jobs"])
+    with c:
+        languages = sorted({lang for person in CLEANERS.values() for lang in person["languages"]})
+        language = st.selectbox("Cleaner language", ["Any", *languages])
+    with d:
+        sort = st.selectbox("Sort by", ["Top rated", "Lowest price", "Most jobs"])
 
-    st.caption(SERVICES[service][2])
     matches = [
-        profile
-        for profile in PROFILES
-        if area in profile["areas"]
-        and service in profile["services"]
-        and (language == "Any" or language in profile["languages"])
+        (key, person)
+        for key, person in CLEANERS.items()
+        if area in person["areas"]
+        and service in person["services"]
+        and (language == "Any" or language in person["languages"])
     ]
+    order_by = {
+        "Top rated": lambda item: (-item[1]["rating"], -item[1]["jobs"]),
+        "Lowest price": lambda item: hourly_rate(item[1], service),
+        "Most jobs": lambda item: -item[1]["jobs"],
+    }
+    matches.sort(key=order_by[sort])
 
-    if order == "Lowest hourly rate":
-        matches.sort(key=lambda profile: service_price(profile, service))
-    elif order == "Most jobs":
-        matches.sort(key=lambda profile: -profile["jobs"])
+    view = st.segmented_control(
+        "Results view", ["Split", "List", "Map"], default="Split"
+    ) or "Split"
+    if view == "Split":
+        list_column, map_column = st.columns([1, 1], gap="large")
     else:
-        matches.sort(key=lambda profile: (-profile["rating"], -profile["jobs"]))
+        list_column = map_column = st.container()
 
-    selected = next(
-        (profile for profile in matches if profile["id"] == st.session_state.lc_selected),
-        None,
-    )
+    if view != "Map":
+        with list_column:
+            st.subheader(f"Matching cleaners ({len(matches)})")
+            if not matches:
+                st.info("Try another service, area or cleaner language.")
+            for key, cleaner in matches:
+                with st.container(border=True):
+                    cleaner_header(cleaner)
+                    st.write(
+                        f"★ {cleaner['rating']:.1f} · {cleaner['jobs']} jobs · "
+                        f"**CHF {hourly_rate(cleaner, service)}/h**"
+                    )
+                    st.caption(" · ".join(cleaner["languages"]))
+                    if st.button("View profile", key=f"profile_{key}", width="stretch"):
+                        state.lc_choice = {"cleaner": key, "area": area, "service": service}
+                        st.switch_page(PROFILE_PAGE)
 
-    profiles_column, map_column = st.columns([1, 1], gap="large")
+    if view != "List":
+        with map_column:
+            st.subheader("Service map")
+            show_map(area, [cleaner for _, cleaner in matches])
 
-    with profiles_column:
-        st.subheader(f"Matching cleaners ({len(matches)})")
-        if not matches:
-            st.info("No demo profiles match these filters. Try another language or area.")
 
-        for profile in matches:
-            active = selected is not None and selected["id"] == profile["id"]
-            with st.container(border=True):
-                st.markdown(
-                    f"""
-                    <div class="lc-profile">
-                        <div class="lc-avatar">{profile['initials']}</div>
-                        <div>
-                            <h4>{profile['name']}</h4>
-                            <small>Based in {profile['base']}</small>
-                        </div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
-                st.write(
-                    f"⭐ {profile['rating']:.1f} · {profile['jobs']} jobs · "
-                    f"**CHF {service_price(profile, service)}/hour**"
-                )
-                st.caption(" · ".join(profile["languages"]))
-                with st.expander(f"About {profile['name']}"):
-                    st.write(profile["bio"])
-                    st.write("Services · " + ", ".join(profile["services"]))
-                    st.write("Coverage · " + ", ".join(profile["areas"]))
-                st.button(
-                    "Selected" if active else f"Choose {profile['name']}",
-                    key=f"profile_{profile['id']}",
-                    type="primary" if active else "secondary",
-                    disabled=active,
-                    width="stretch",
-                    on_click=select_cleaner,
-                    args=(profile["id"],),
-                )
+def profile():
+    back("← Explore", EXPLORE_PAGE)
+    choice = state.get("lc_choice")
+    if not choice:
+        st.info("Choose a cleaner in Explore to view their profile.")
+        return
 
-    with map_column:
-        st.subheader("Service map")
-        areas_on_map = list(dict.fromkeys([area] + [profile["base"] for profile in matches]))
-        points = [
-            {
-                "latitude": AREAS[place][0],
-                "longitude": AREAS[place][1],
-                "marker": "#187850" if place == area else "#d88438",
-            }
-            for place in areas_on_map
-        ]
-        st.map(points, color="marker", size=240, height=400)
-        st.caption("Green · Selected service area. Orange · Approximate cleaner bases.")
-        st.link_button(
-            f"Open {area} in Google Maps",
-            maps_url("search", query=f"{area}, Switzerland"),
-            width="stretch",
-        )
-        if selected and selected["base"] != area:
+    cleaner = CLEANERS[choice["cleaner"]]
+    area, service = choice["area"], choice["service"]
+    info, action = st.columns([3, 2], gap="large")
+
+    with info:
+        with st.container(border=True):
+            cleaner_header(cleaner)
+            st.write(f"**★ {cleaner['rating']:.1f}** · {cleaner['jobs']} completed demo jobs")
+            st.write(cleaner["bio"])
+            st.write("**Languages** · " + ", ".join(cleaner["languages"]))
+            st.write("**Services** · " + ", ".join(cleaner["services"]))
+            st.write("**Coverage** · " + ", ".join(cleaner["areas"]))
+
+    with action:
+        with st.container(border=True):
+            st.subheader(service)
+            st.write(f"Visit area · {area}")
+            st.metric("Hourly rate", f"CHF {hourly_rate(cleaner, service)}")
+            if st.button("Choose date and extras", type="primary", width="stretch"):
+                st.switch_page(CHECKOUT_PAGE)
             st.link_button(
-                f"Directions from {selected['base']}",
+                "Open route in Google Maps",
                 maps_url(
                     "dir",
-                    origin=f"{selected['base']}, Switzerland",
+                    origin=f"{cleaner['base']}, Switzerland",
                     destination=f"{area}, Switzerland",
                     travelmode="driving",
                 ),
                 width="stretch",
             )
 
-    if selected:
-        st.divider()
-        st.subheader(f"Plan your visit with {selected['name']}")
-        visit_column, quote_column = st.columns([3, 2], gap="large")
-        minimum = SERVICES[service][0]
-        rate = service_price(selected, service)
 
-        with visit_column:
-            hours = st.slider(
-                "Estimated cleaning hours",
-                min_value=minimum,
-                max_value=8,
-                value=minimum,
-                key=f"lc_hours_{service}",
-            )
-            extras = st.multiselect(
-                "Extras",
-                list(ADD_ONS),
-                format_func=lambda label: f"{label} (+CHF {ADD_ONS[label]})",
-            )
+def checkout():
+    back("← Cleaner profile", PROFILE_PAGE)
+    choice = state.get("lc_choice")
+    if not choice:
+        st.info("Choose a cleaner in Explore first.")
+        return
 
-        total = hours * rate + sum(ADD_ONS[extra] for extra in extras)
+    cleaner = CLEANERS[choice["cleaner"]]
+    service, area = choice["service"], choice["area"]
+    minimum = SERVICES[service][0]
+    rate = hourly_rate(cleaner, service)
+    today = swiss_now().date()
 
-        with quote_column:
-            st.markdown(
-                f"""
-                <div class="lc-quote">
-                    <p>Estimated total</p>
-                    <div>CHF {total:,.0f}</div>
-                    <p>{hours} hours × CHF {rate} plus selected extras</p>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-            st.caption("Demo estimate. Final scope and price require confirmation.")
+    st.title("Review your visit")
+    st.write(f"{service} with **{cleaner['name']}** in {area}")
+    form_column, price_column = st.columns([3, 2], gap="large")
 
-        now = datetime.now(ZURICH)
-        today = now.date()
-        possible_hours = range(8, 20 - hours + 1)
-
-        with st.form("lc_booking"):
-            date_column, time_column = st.columns(2)
-            with date_column:
-                visit_date = st.date_input(
-                    "Preferred date",
-                    value=today + timedelta(days=1),
-                    min_value=today,
-                    max_value=today + timedelta(days=90),
-                    format="DD.MM.YYYY",
-                )
-            with time_column:
-                start_hour = st.selectbox(
-                    "Start time · Swiss local time",
-                    list(possible_hours),
-                    format_func=lambda hour: f"{hour:02d}:00",
-                )
-
-            submitted = st.form_submit_button(
-                "Request this cleaner", type="primary", width="stretch"
+    with form_column:
+        st.subheader("Date and extras")
+        hours = st.slider("Estimated hours", minimum, 8, minimum, key=f"hours_{service}")
+        extras = st.multiselect(
+            "Add extras",
+            list(EXTRAS),
+            format_func=lambda name: f"{name} (+CHF {EXTRAS[name]})",
+        )
+        day_col, hour_col = st.columns(2)
+        with day_col:
+            day = st.date_input(
+                "Visit date",
+                value=today + timedelta(days=1),
+                min_value=today,
+                max_value=today + timedelta(days=90),
+                format="DD.MM.YYYY",
             )
 
-        if submitted:
-            starts = datetime.combine(visit_date, time(start_hour), tzinfo=ZURICH)
+        available = []
+        for hour in range(8, 20 - hours + 1):
+            starts = datetime.combine(day, time(hour), tzinfo=ZURICH)
             ends = starts + timedelta(hours=hours)
+            occupied = any(
+                order["cleaner"] == choice["cleaner"]
+                and order["status"] in STATUS_FLOW[:-1]
+                and starts < order["ends"]
+                and ends > order["starts"]
+                for order in state.lc_orders
+            )
+            if starts > swiss_now() and not occupied:
+                available.append(starts)
 
-            if starts <= datetime.now(ZURICH):
-                st.error("Choose a start time in the future.")
-            elif overlapping_booking(selected["id"], starts, ends):
-                st.error("This overlaps with one of your existing demo bookings.")
-            else:
-                booking_id = uuid4().hex[:8].upper()
-                st.session_state.lc_bookings.append({
-                    "id": booking_id,
-                    "profile_id": selected["id"],
-                    "cleaner": selected["name"],
-                    "service": service,
-                    "area": area,
-                    "starts": starts,
-                    "ends": ends,
-                    "total": total,
-                    "extras": extras,
-                    "status": "Requested",
-                    "history": [("Requested", datetime.now(ZURICH))],
-                })
-                st.session_state.lc_notice = (
-                    f"Request {booking_id} saved. See My bookings for its status."
-                )
-                st.rerun()
+        with hour_col:
+            starts = st.selectbox(
+                "Start time · Swiss local time",
+                available,
+                format_func=lambda slot: slot.strftime("%H:%M"),
+                placeholder="No times available",
+            )
 
-    notice = st.session_state.pop("lc_notice", None)
-    if notice:
-        st.success(notice)
+        st.subheader("Address and payment")
+        address_options = {
+            key: address["label"]
+            for key, address in state.lc_addresses.items()
+            if address["area"] == area
+        }
+        address = st.selectbox(
+            "Visit address",
+            [None, *address_options],
+            format_func=lambda key: address_options[key] if key else f"Use {area} only",
+        )
+        card = st.selectbox(
+            "Payment method",
+            [None, *state.lc_cards],
+            format_func=lambda key: state.lc_cards[key] if key else "Pay after service · demo",
+        )
+        st.page_link(ACCOUNT_PAGE, label="Manage addresses and payment methods")
 
-
-with bookings_tab:
-    st.subheader("My bookings")
-    if not st.session_state.lc_bookings:
-        st.info("Choose a cleaner and request a visit to see your booking here.")
-
-    for booking in reversed(st.session_state.lc_bookings):
-        booking_id = booking["id"]
-        status = booking["status"]
-
+    subtotal = hours * rate
+    total = subtotal + sum(EXTRAS[name] for name in extras)
+    with price_column:
         with st.container(border=True):
-            info_column, price_column = st.columns([3, 1])
+            st.subheader("Price breakdown")
+            st.write(f"{hours} hours × CHF {rate}  ·  CHF {subtotal}")
+            for name in extras:
+                st.write(f"{name}  ·  CHF {EXTRAS[name]}")
+            st.divider()
+            st.metric("Estimated total", f"CHF {total}")
+            submitted = st.button(
+                "Request booking",
+                type="primary",
+                width="stretch",
+                disabled=starts is None,
+            )
+            st.caption("Demo booking. No charge will be made.")
 
-            with info_column:
-                st.markdown(f"**{booking['service']} with {booking['cleaner']}**")
-                st.write(
-                    f"{booking['area']} · {booking['starts']:%d.%m.%Y} · "
-                    f"{booking['starts']:%H:%M}–{booking['ends']:%H:%M}"
-                )
-                if booking["extras"]:
-                    st.caption("Extras · " + ", ".join(booking["extras"]))
+    if submitted and starts is not None:
+        if starts <= swiss_now():
+            st.error("This start time has passed. Choose a later time.")
+            return
+        booking = {
+            **choice,
+            "id": uuid4().hex[:8].upper(),
+            "starts": starts,
+            "ends": starts + timedelta(hours=hours),
+            "total": total,
+            "extras": extras,
+            "address": address_options.get(address, area),
+            "payment": state.lc_cards.get(card, "Pay after service · demo"),
+            "status": "Requested",
+            "history": [("Requested", swiss_now())],
+        }
+        state.lc_orders.append(booking)
+        state.lc_order_id = booking["id"]
+        st.switch_page(DETAIL_PAGE)
 
-            with price_column:
-                st.metric("Estimate", f"CHF {booking['total']:,.0f}")
 
-            st.write(f"**{status}** · Reference `{booking_id}`")
-            if status in STATUSES:
-                step = STATUSES.index(status)
-                st.progress((step + 1) / len(STATUSES))
+def bookings():
+    st.title("Bookings")
+    completed = [order for order in state.lc_orders if order["status"] == "Completed"]
+    a, b, c = st.columns(3)
+    a.metric("Total requests", len(state.lc_orders))
+    b.metric("Completed services", len(completed))
+    c.metric("Total spent · demo", f"CHF {sum(item['total'] for item in completed)}")
 
-                if step + 1 < len(STATUSES):
-                    next_status = STATUSES[step + 1]
-                    st.button(
-                        f"Simulate {next_status.lower()}",
-                        key=f"lc_progress_{booking_id}",
-                        on_click=change_status,
-                        args=(booking_id, next_status),
-                    )
+    group = st.segmented_control(
+        "Booking history",
+        ["Upcoming", "Past services", "Cancelled"],
+        default="Upcoming",
+    ) or "Upcoming"
+    groups = {
+        "Upcoming": STATUS_FLOW[:-1],
+        "Past services": ("Completed",),
+        "Cancelled": ("Cancelled",),
+    }
+    matching = [order for order in state.lc_orders if order["status"] in groups[group]]
+
+    if not matching:
+        st.info("No bookings in this section yet.")
+        st.page_link(EXPLORE_PAGE, label="Find a cleaner")
+
+    for order in sorted(matching, key=lambda item: item["starts"], reverse=group != "Upcoming"):
+        with st.container(border=True):
+            left, right = st.columns([3, 1])
+            with left:
+                st.markdown(f"**{order['service']} · {CLEANERS[order['cleaner']]['name']}**")
+                st.write(f"{order['area']} · {visit_label(order)}")
+                st.caption(f"{order['status']} · {order['id']}")
+            with right:
+                st.write(f"**CHF {order['total']}**")
+                if st.button("View details", key=f"view_{order['id']}", width="stretch"):
+                    state.lc_order_id = order["id"]
+                    st.switch_page(DETAIL_PAGE)
+
+
+def booking_detail():
+    back("← Bookings", BOOKINGS_PAGE)
+    order = next(
+        (item for item in state.lc_orders if item["id"] == state.get("lc_order_id")),
+        None,
+    )
+    if order is None:
+        st.info("Open a reservation from Bookings to see its details.")
+        return
+
+    st.title(order["service"])
+    st.write(f"With **{CLEANERS[order['cleaner']]['name']}** · {visit_label(order)}")
+    details, activity = st.columns(2, gap="large")
+    with details:
+        with st.container(border=True):
+            st.subheader("Visit details")
+            st.text(f"{order['address']} · {order['area']}")
+            st.write(f"**CHF {order['total']}** · {order['payment']}")
+            if order["extras"]:
+                st.caption("Extras · " + ", ".join(order["extras"]))
+            st.caption(f"Booking reference · {order['id']}")
+
+    with activity:
+        with st.container(border=True):
+            status = order["status"]
+            st.subheader(status)
+            if status in STATUS_FLOW:
+                step = STATUS_FLOW.index(status)
+                st.progress((step + 1) / len(STATUS_FLOW))
+                if step < len(STATUS_FLOW) - 1:
+                    next_status = STATUS_FLOW[step + 1]
+                    if st.button(f"Demo · mark as {next_status.lower()}"):
+                        order["status"] = next_status
+                        order["history"].append((next_status, swiss_now()))
+                        st.rerun()
 
             if status in ("Requested", "Confirmed"):
-                st.button(
-                    "Cancel request",
-                    key=f"lc_cancel_{booking_id}",
-                    on_click=change_status,
-                    args=(booking_id, "Cancelled"),
-                )
+                if st.button("Cancel booking"):
+                    order["status"] = "Cancelled"
+                    order["history"].append(("Cancelled", swiss_now()))
+                    st.rerun()
+
+            if status in ("Completed", "Cancelled"):
+                if st.button("Book again", type="primary"):
+                    state.lc_choice = {key: order[key] for key in ("cleaner", "area", "service")}
+                    st.switch_page(CHECKOUT_PAGE)
 
             with st.expander("Status history"):
-                for event_status, event_time in booking["history"]:
-                    st.write(f"{event_time:%d.%m.%Y %H:%M} · {event_status}")
+                for event, timestamp in reversed(order["history"]):
+                    st.write(f"**{event}** · {timestamp:%d.%m.%Y %H:%M}")
+
+
+def account():
+    st.title("Account")
+    if state.lc_personal["name"]:
+        st.text(state.lc_personal["name"])
+
+    items = [
+        ("Personal info", "Name, email and phone", PERSONAL_PAGE),
+        ("Saved addresses", f"{len(state.lc_addresses)} saved", ADDRESSES_PAGE),
+        ("Payment methods", f"{len(state.lc_cards)} demo cards", PAYMENTS_PAGE),
+        ("Account settings", "Language preference and reminders", SETTINGS_PAGE),
+    ]
+    for label, description, page in items:
+        with st.container(border=True):
+            st.page_link(page, label=label)
+            st.caption(description)
+
+
+def personal():
+    back("← Account", ACCOUNT_PAGE)
+    st.title("Personal info")
+    st.caption("Use sample details in this demo.")
+    current = state.lc_personal
+    with st.form("personal_form"):
+        name = st.text_input("Full name", value=current["name"], max_chars=80)
+        email = st.text_input("Email", value=current["email"], max_chars=120)
+        phone = st.text_input("Phone", value=current["phone"], max_chars=30)
+        if st.form_submit_button("Save changes", type="primary"):
+            if email and ("@" not in email or " " in email):
+                st.error("Enter an email address such as name@example.com.")
+            else:
+                state.lc_personal = {
+                    "name": name.strip(), "email": email.strip(), "phone": phone.strip()
+                }
+                st.success("Personal info saved for this session.")
+
+
+def addresses():
+    back("← Account", ACCOUNT_PAGE)
+    st.title("Saved addresses")
+    st.caption("Use a label such as Home or Office. Street addresses are unnecessary in this demo.")
+
+    for key, item in list(state.lc_addresses.items()):
+        with st.container(border=True):
+            st.text(f"{item['label']} · {item['area']}")
+            if st.button("Remove", key=f"remove_address_{key}"):
+                del state.lc_addresses[key]
+                st.rerun()
+
+    with st.form("address_form", clear_on_submit=True):
+        label = st.text_input("Address label", max_chars=50)
+        area = st.selectbox("Municipality", list(AREAS))
+        if st.form_submit_button("Add address", type="primary"):
+            if not label.strip():
+                st.error("Enter a label for this address.")
+            else:
+                state.lc_addresses[uuid4().hex] = {"label": label.strip(), "area": area}
+                st.rerun()
+
+
+def payments():
+    back("← Account", ACCOUNT_PAGE)
+    st.title("Payment methods")
+    st.caption("Sample cards only. The app never asks for card numbers or security codes.")
+
+    for brand, label in list(state.lc_cards.items()):
+        with st.container(border=True):
+            st.write(label)
+            if st.button("Remove", key=f"remove_card_{brand}"):
+                del state.lc_cards[brand]
+                st.rerun()
+
+    available = [brand for brand in DEMO_CARDS if brand not in state.lc_cards]
+    if available:
+        with st.form("payment_form"):
+            brand = st.selectbox("Demo card", available)
+            if st.form_submit_button("Add payment method", type="primary"):
+                state.lc_cards[brand] = f"{brand} ···· {DEMO_CARDS[brand]}"
+                st.rerun()
+
+
+def settings():
+    back("← Account", ACCOUNT_PAGE)
+    st.title("Account settings")
+    st.caption("These preferences are saved for the demo session. The interface is in English.")
+    languages = ["English", "Deutsch", "Türkçe"]
+    with st.form("settings_form"):
+        language = st.selectbox(
+            "Preferred language",
+            languages,
+            index=languages.index(state.lc_preferences["language"]),
+        )
+        reminders = st.toggle(
+            "Booking reminders", value=state.lc_preferences["reminders"]
+        )
+        if st.form_submit_button("Save settings", type="primary"):
+            state.lc_preferences = {"language": language, "reminders": reminders}
+            st.success("Preferences saved for this session.")
+
+
+EXPLORE_PAGE = st.Page(explore, title="Explore", icon=":material/explore:", default=True)
+BOOKINGS_PAGE = st.Page(bookings, title="Bookings", icon=":material/calendar_month:", url_path="bookings")
+ACCOUNT_PAGE = st.Page(account, title="Account", icon=":material/person:", url_path="account")
+PROFILE_PAGE = st.Page(profile, title="Cleaner profile", url_path="cleaner")
+CHECKOUT_PAGE = st.Page(checkout, title="Review visit", url_path="review")
+DETAIL_PAGE = st.Page(booking_detail, title="Booking details", url_path="booking")
+PERSONAL_PAGE = st.Page(personal, title="Personal info", url_path="personal-info")
+ADDRESSES_PAGE = st.Page(addresses, title="Saved addresses", url_path="addresses")
+PAYMENTS_PAGE = st.Page(payments, title="Payment methods", url_path="payments")
+SETTINGS_PAGE = st.Page(settings, title="Account settings", url_path="settings")
+
+page = st.navigation(
+    [
+        EXPLORE_PAGE, BOOKINGS_PAGE, ACCOUNT_PAGE, PROFILE_PAGE, CHECKOUT_PAGE,
+        DETAIL_PAGE, PERSONAL_PAGE, ADDRESSES_PAGE, PAYMENTS_PAGE, SETTINGS_PAGE,
+    ],
+    position="hidden",
+)
+
+st.html(
+    """
+    <style>
+    @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Instrument+Serif&display=swap');
+    :root { --lc-green: #1c6248; --lc-ink: #18362d; }
+    .stApp { background: #f6f8f3; }
+    [data-testid="stHeader"] { background: transparent; }
+    [data-testid="stMainBlockContainer"] {
+        max-width: 1200px;
+        padding-top: 2.5rem;
+        padding-bottom: 3rem;
+        color: var(--lc-ink);
+        font-family: "DM Sans", sans-serif;
+    }
+    [data-testid="stMainBlockContainer"] :is(h1,h2,h3,p,label) {
+        color: var(--lc-ink);
+    }
+    [data-testid="stVerticalBlockBorderWrapper"]:has(> div > .lc-person) {
+        background: white;
+    }
+    .lc-brand { font: 700 1.2rem "DM Sans", sans-serif; color: var(--lc-ink); }
+    .lc-hero {
+        background: radial-gradient(ellipse at 94% 0%, #4a896a, transparent 59%),
+                    linear-gradient(125deg, #15392c, #1d5943);
+        padding: clamp(28px, 6vw, 68px);
+        border-radius: 26px;
+        margin-bottom: 8px;
+    }
+    .lc-hero h1 {
+        color: white !important;
+        font: 400 clamp(2.7rem, 6vw, 5rem)/1 "Instrument Serif", Georgia, serif;
+        margin: 0;
+        padding: 0;
+    }
+    .lc-hero p { color: #e0f1e7 !important; margin: 14px 0 0; }
+    .lc-person { display: flex; align-items: center; gap: 14px; }
+    .lc-person strong { color: var(--lc-ink); font-size: 1.1rem; }
+    .lc-person small { display: block; color: #4d695c; }
+    .lc-avatar {
+        width: 50px;
+        height: 50px;
+        display: grid;
+        place-items: center;
+        border-radius: 16px;
+        background: #dcf0e4;
+        color: #1a5a40;
+        font-weight: 700;
+    }
+    button[kind="primary"] {
+        background: var(--lc-green);
+        border-color: var(--lc-green);
+        color: white;
+    }
+    </style>
+    """
+)
+
+st.html('<div class="lc-brand">Luzern Clean</div>')
+nav_columns = st.columns(3)
+for col, destination in zip(nav_columns, (EXPLORE_PAGE, BOOKINGS_PAGE, ACCOUNT_PAGE)):
+    with col:
+        st.page_link(destination, width="stretch")
+
+st.divider()
+page.run()
+st.divider()
+st.caption("Luzern Clean demo · Sample cleaners and prices · Session-only data")
